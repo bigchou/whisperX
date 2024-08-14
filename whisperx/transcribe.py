@@ -39,6 +39,7 @@ def cli():
     parser.add_argument("--return_char_alignments", action='store_true', help="Return character-level alignments in the output json file")
 
     # vad params
+    parser.add_argument('--vad_model', type=str, default=None, choices=["pyannet", "silerov4"], help='select the VAD whatever you want')
     parser.add_argument("--vad_onset", type=float, default=0.500, help="Onset threshold for VAD (see pyannote.audio), reduce this if speech is not being detected")
     parser.add_argument("--vad_offset", type=float, default=0.363, help="Offset threshold for VAD (see pyannote.audio), reduce this if speech is not being detected.")
     parser.add_argument("--chunk_size", type=int, default=30, help="Chunk size for merging VAD segments. Default is 30, reduce this if the chunk is too long.")
@@ -104,6 +105,7 @@ def cli():
     hf_token: str = args.pop("hf_token")
     vad_onset: float = args.pop("vad_onset")
     vad_offset: float = args.pop("vad_offset")
+    vad_model: str= args.pop("vad_model")
 
     chunk_size: int = args.pop("chunk_size")
 
@@ -167,13 +169,20 @@ def cli():
     results = []
     tmp_results = []
     # model = load_model(model_name, device=device, download_root=model_dir)
-    model = load_model(model_name, device=device, device_index=device_index, download_root=model_dir, compute_type=compute_type, language=args['language'], asr_options=asr_options, vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset}, task=task, threads=faster_whisper_threads)
+    model = load_model(model_name, device=device, device_index=device_index, download_root=model_dir, compute_type=compute_type, language=args['language'], asr_options=asr_options, vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset}, task=task, threads=faster_whisper_threads, vad_model=vad_model)
 
     for audio_path in args.pop("audio"):
         audio = load_audio(audio_path)
         # >> VAD & ASR
         print(">>Performing transcription...")
-        result = model.transcribe(audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
+        result = model.transcribe(audio_path if vad_model in ['silerov4'] else audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
+        #result = model.transcribe(audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
+        # {'segments': [{'text': ' you.',     'start': 30.384, 'end': 31.984}], 'language': 'en'} <---- silerov4
+        # {'segments': [{'text': ' 3, 2, 1.', 'start': 30.316, 'end': 31.323}], 'language': 'en'} <--- pyannote
+        
+        # print("vad results:")
+        # for item in result['segments']:
+        #     print('[%.3f - %.3f] %s'%(item['start'], item['end'], item['text']))
         results.append((result, audio_path))
 
     # Unload Whisper and VAD
@@ -182,6 +191,8 @@ def cli():
     torch.cuda.empty_cache()
 
     # Part 2: Align Loop
+    if vad_model in ['silerov4']:
+        torch.backends.cudnn.enabled = False
     if not no_align:
         tmp_results = results
         results = []

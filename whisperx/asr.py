@@ -85,6 +85,12 @@ class WhisperModel(faster_whisper.WhisperModel):
 
         return self.model.encode(features, to_cpu=to_cpu)
 
+
+class SimulatedSlidingWindowFeature:
+    def __init__(self, **entries):
+        self.__dict__.update(entries)
+
+
 class FasterWhisperPipeline(Pipeline):
     """
     Huggingface Pipeline wrapper for FasterWhisperModel.
@@ -104,6 +110,7 @@ class FasterWhisperPipeline(Pipeline):
             framework = "pt",
             language : Optional[str] = None,
             suppress_numerals: bool = False,
+            vad_name : str = None,
             **kwargs
     ):
         self.model = model
@@ -131,6 +138,7 @@ class FasterWhisperPipeline(Pipeline):
         super(Pipeline, self).__init__()
         self.vad_model = vad
         self._vad_params = vad_params
+        self.vad_name = vad_name
 
     def _sanitize_parameters(self, **kwargs):
         preprocess_kwargs = {}
@@ -173,7 +181,9 @@ class FasterWhisperPipeline(Pipeline):
     def transcribe(
         self, audio: Union[str, np.ndarray], batch_size=None, num_workers=0, language=None, task=None, chunk_size=30, print_progress = False, combined_progress=False
     ) -> TranscriptionResult:
+        audio_path = None
         if isinstance(audio, str):
+            audio_path = audio
             audio = load_audio(audio)
 
         def data(audio, segments):
@@ -183,13 +193,30 @@ class FasterWhisperPipeline(Pipeline):
                 # print(f2-f1)
                 yield {'inputs': audio[f1:f2]}
 
-        vad_segments = self.vad_model({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE})
+        print("run %s..."%(self.vad_name))
+        if self.vad_name == 'pyannet':
+            vad_segments = self.vad_model({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE})
+            # type(vad_segments) = <class 'pyannote.core.feature.SlidingWindowFeature'>
+        elif self.vad_name == 'silerov4':
+            assert audio_path is not None, "audio_str should not be None"
+            raw_probs = self.vad_model.audio_forward(self.vad_model.read_audio(audio_path), sr=SAMPLE_RATE, num_samples=512)
+            #raw_probs = self.vad_model.audio_forward(torch.from_numpy(audio), sr=SAMPLE_RATE, num_samples=512)
+            _, num_frames = raw_probs.shape
+            time_step = 512 / SAMPLE_RATE
+            timestamps = [time_step/2 + time_step*i for i in range(num_frames)]
+            vad_segments = SimulatedSlidingWindowFeature(timestamps=timestamps, data=raw_probs.T, labels=None)
+            # type(vad_segments) = <class 'whisperx.asr.SimulatedSlidingWindowFeature'>
+        else:
+            raise NotImplementedError
+        
         vad_segments = merge_chunks(
             vad_segments,
             chunk_size,
             onset=self._vad_params["vad_onset"],
             offset=self._vad_params["vad_offset"],
         )
+        # type(vad_segments) = list
+        # e.g. vad_segments = [{'start': 30.31569965870307, 'end': 31.322525597269625, 'segments': [(30.31569965870307, 31.322525597269625)]}]
         if self.tokenizer is None:
             language = language or self.detect_language(audio)
             task = task or "transcribe"
@@ -340,11 +367,18 @@ def load_model(whisper_arch,
 
     if vad_options is not None:
         default_vad_options.update(vad_options)
-
-    if vad_model is not None:
-        vad_model = vad_model
-    else:
+    
+    if vad_model == "pyannet":
+        vad_name = 'pyannet'
         vad_model = load_vad_model(torch.device(device), use_auth_token=None, **default_vad_options)
+    elif vad_model == 'silerov4':
+        vad_name = 'silerov4'
+        vad_model = torch.hub.load(repo_or_dir="whisperx/silero-vadv4", model="silero_vad", source='local', onnx=True, force_onnx_cpu=True)
+    else:
+        vad_name = 'pyannet'
+        # load pyannote VAD
+        vad_model = load_vad_model(torch.device(device), use_auth_token=None, **default_vad_options)
+        # vad_model = <class 'whisperx.vad.VoiceActivitySegmentation'>
 
     return FasterWhisperPipeline(
         model=model,
@@ -354,4 +388,5 @@ def load_model(whisper_arch,
         language=language,
         suppress_numerals=suppress_numerals,
         vad_params=default_vad_options,
+        vad_name=vad_name
     )

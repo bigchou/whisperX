@@ -1,3 +1,14 @@
+<h1> Update Note </h1>
+
+1. Support SileroVAD
+
+~~~~
+(whisperx) timmy.wan@alg4:~/whisperX$ whisperx uzra.wav --vad_model silerov4 --compute_type int8
+~~~~
+
+
+
+
 <h1 align="center">WhisperX</h1>
 
 <p align="center">

@@ -127,9 +127,12 @@ class Binarize:
             Binarized scores.
         """
 
-        num_frames, num_classes = scores.data.shape
-        frames = scores.sliding_window
-        timestamps = [frames[i].middle for i in range(num_frames)]
+        if isinstance(scores, SlidingWindowFeature):
+            num_frames, _ = scores.data.shape
+            frames = scores.sliding_window
+            timestamps = [frames[i].middle for i in range(num_frames)] # middle = .5 * (self.start + self.end)
+        else:
+            timestamps = scores.timestamps
 
         # annotation meant to store 'active' regions
         active = Annotation()
