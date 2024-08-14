@@ -206,6 +206,13 @@ class FasterWhisperPipeline(Pipeline):
             timestamps = [time_step/2 + time_step*i for i in range(num_frames)]
             vad_segments = SimulatedSlidingWindowFeature(timestamps=timestamps, data=raw_probs.T, labels=None)
             # type(vad_segments) = <class 'whisperx.asr.SimulatedSlidingWindowFeature'>
+        elif self.vad_name == 'silerov5.1':
+            assert audio_path is not None, "audio_str should not be None"
+            raw_probs = self.vad_model.audio_forward(self.vad_model.read_audio(audio_path), sr=SAMPLE_RATE)
+            _, num_frames = raw_probs.shape
+            time_step = 512 / SAMPLE_RATE
+            timestamps = [time_step/2 + time_step*i for i in range(num_frames)]
+            vad_segments = SimulatedSlidingWindowFeature(timestamps=timestamps, data=raw_probs.T, labels=None)
         else:
             raise NotImplementedError
         
@@ -374,6 +381,9 @@ def load_model(whisper_arch,
     elif vad_model == 'silerov4':
         vad_name = 'silerov4'
         vad_model = torch.hub.load(repo_or_dir="whisperx/silero-vadv4", model="silero_vad", source='local', onnx=True, force_onnx_cpu=True)
+    elif vad_model == 'silerov5.1':
+        vad_name = 'silerov5.1'
+        vad_model = torch.hub.load(repo_or_dir="whisperx/silero-vadv5.1", model="silero_vad", source='local', onnx=True, force_onnx_cpu=True)
     else:
         vad_name = 'pyannet'
         # load pyannote VAD

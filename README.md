@@ -3,7 +3,14 @@
 1. Support SileroVAD
 
 ~~~~
+# PyanNet (pyannote VAD)
+(whisperx) timmy.wan@alg4:~/whisperX$ whisperx uzra.wav --vad_model pyannet --compute_type int8
+
+# SileroVAD v4
 (whisperx) timmy.wan@alg4:~/whisperX$ whisperx uzra.wav --vad_model silerov4 --compute_type int8
+
+# SileroVAD v5.1
+(whisperx) timmy.wan@alg4:~/whisperX$ whisperx uzra.wav --vad_model silerov5.1 --compute_type int8
 ~~~~
 
 

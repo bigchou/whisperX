@@ -39,7 +39,7 @@ def cli():
     parser.add_argument("--return_char_alignments", action='store_true', help="Return character-level alignments in the output json file")
 
     # vad params
-    parser.add_argument('--vad_model', type=str, default=None, choices=["pyannet", "silerov4"], help='select the VAD whatever you want')
+    parser.add_argument('--vad_model', type=str, default=None, choices=["pyannet", "silerov4", "silerov5.1"], help='select the VAD whatever you want')
     parser.add_argument("--vad_onset", type=float, default=0.500, help="Onset threshold for VAD (see pyannote.audio), reduce this if speech is not being detected")
     parser.add_argument("--vad_offset", type=float, default=0.363, help="Offset threshold for VAD (see pyannote.audio), reduce this if speech is not being detected.")
     parser.add_argument("--chunk_size", type=int, default=30, help="Chunk size for merging VAD segments. Default is 30, reduce this if the chunk is too long.")
@@ -175,7 +175,7 @@ def cli():
         audio = load_audio(audio_path)
         # >> VAD & ASR
         print(">>Performing transcription...")
-        result = model.transcribe(audio_path if vad_model in ['silerov4'] else audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
+        result = model.transcribe(audio_path if vad_model in ['silerov4', 'silerov5.1'] else audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
         #result = model.transcribe(audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
         # {'segments': [{'text': ' you.',     'start': 30.384, 'end': 31.984}], 'language': 'en'} <---- silerov4
         # {'segments': [{'text': ' 3, 2, 1.', 'start': 30.316, 'end': 31.323}], 'language': 'en'} <--- pyannote
@@ -191,7 +191,7 @@ def cli():
     torch.cuda.empty_cache()
 
     # Part 2: Align Loop
-    if vad_model in ['silerov4']:
+    if vad_model in ['silerov4', 'silerov5.1']:
         torch.backends.cudnn.enabled = False
     if not no_align:
         tmp_results = results
