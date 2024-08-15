@@ -13,6 +13,8 @@ from .audio import N_SAMPLES, SAMPLE_RATE, load_audio, log_mel_spectrogram
 from .vad import load_vad_model, merge_chunks
 from .types import TranscriptionResult, SingleSegment
 
+from whisperx.fsmnvad import FSMNVad
+
 def find_numeral_symbol_tokens(tokenizer):
     numeral_symbol_tokens = []
     for i in range(tokenizer.eot):
@@ -213,6 +215,14 @@ class FasterWhisperPipeline(Pipeline):
             time_step = 512 / SAMPLE_RATE
             timestamps = [time_step/2 + time_step*i for i in range(num_frames)]
             vad_segments = SimulatedSlidingWindowFeature(timestamps=timestamps, data=raw_probs.T, labels=None)
+        elif self.vad_name == 'fsmnvad':
+            assert audio_path is not None, "audio_str should not be None"
+            raw_probs = self.vad_model.audio_forward(audio_path)[None,:]
+            _, num_frames = raw_probs.shape
+            time_step = self.vad_model.vad.vad_opts.frame_in_ms / 1000.0
+            base = self.vad_model.vad.vad_opts.frame_length_ms / 1000.0 / 2.0
+            timestamps = [base] + [base+time_step*i for i in range(1, num_frames)]
+            vad_segments = SimulatedSlidingWindowFeature(timestamps=timestamps, data=raw_probs.T, labels=None)
         else:
             raise NotImplementedError
         
@@ -384,6 +394,9 @@ def load_model(whisper_arch,
     elif vad_model == 'silerov5.1':
         vad_name = 'silerov5.1'
         vad_model = torch.hub.load(repo_or_dir="whisperx/silero-vadv5.1", model="silero_vad", source='local', onnx=True, force_onnx_cpu=True)
+    elif vad_model == 'fsmnvad':
+        vad_name = 'fsmnvad'
+        vad_model = FSMNVad()
     else:
         vad_name = 'pyannet'
         # load pyannote VAD

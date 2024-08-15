@@ -11,6 +11,9 @@
 
 # SileroVAD v5.1
 (whisperx) timmy.wan@alg4:~/whisperX$ whisperx uzra.wav --vad_model silerov5.1 --compute_type int8
+
+# FSMN-VAD
+(whisperx) timmy.wan@alg4:~/whisperX$ whisperx uzra.wav --vad_model fsmnvad  --compute_type int8
 ~~~~
 
 
