@@ -6,6 +6,7 @@ import warnings
 import numpy as np
 import torch
 
+from .mms_align import load_mms_fa
 from .alignment import align, load_align_model
 from .asr import load_model
 from .audio import load_audio
@@ -197,7 +198,12 @@ def cli():
     if not no_align:
         tmp_results = results
         results = []
-        align_model, align_metadata = load_align_model(align_language, device, model_name=align_model)
+
+        disable_mms_fa = align_model is None or align_model.lower() != "mms_fa"
+        if disable_mms_fa:
+            align_model, align_metadata = load_align_model(align_language, device, model_name=align_model)
+        else:
+            align_args = load_mms_fa()
         for result, audio_path in tmp_results:
             # >> Align
             if len(tmp_results) > 1:
@@ -206,14 +212,15 @@ def cli():
                 # lazily load audio from part 1
                 input_audio = audio
 
-            if align_model is not None and len(result["segments"]) > 0:
+            if disable_mms_fa and (align_model is not None and len(result["segments"]) > 0):
                 if result.get("language", "en") != align_metadata["language"]:
                     # load new language
                     print(f"New language found ({result['language']})! Previous was ({align_metadata['language']}), loading new alignment model for new language...")
                     align_model, align_metadata = load_align_model(result["language"], device)
                 print(">>Performing alignment...")
                 result = align(result["segments"], align_model, align_metadata, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
-
+            else:
+                print("MMS_FA")
             results.append((result, audio_path))
 
         # Unload align model
