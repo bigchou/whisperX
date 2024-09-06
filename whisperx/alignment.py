@@ -465,3 +465,22 @@ def merge_words(segments, separator="|"):
         else:
             i2 += 1
     return words
+
+
+if __name__ == "__main__":
+    import json
+    with open('before_align_results.json') as f:
+        results = json.load(f)
+
+    device = 'cuda'
+    interpolate_method = 'nearest'
+    return_char_alignments = False
+    print_progress = False
+    align_model, align_metadata = load_align_model('zh', device)
+
+    tmp_results = results
+    results = []
+    for result, audio_path in tmp_results:
+        input_audio = audio_path
+        result = align(result["segments"], align_model, align_metadata, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
+        import pdb; pdb.set_trace()
