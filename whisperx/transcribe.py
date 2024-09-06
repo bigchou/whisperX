@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 import torch
 
-from .mms_align import load_mms_fa
+from .mms_align import load_mms_fa, mms_align
 from .alignment import align, load_align_model
 from .asr import load_model
 from .audio import load_audio
@@ -221,6 +221,7 @@ def cli():
                 result = align(result["segments"], align_model, align_metadata, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
             else:
                 print("MMS_FA")
+                result = mms_align(result["segments"], align_args, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
             results.append((result, audio_path))
 
         # Unload align model
