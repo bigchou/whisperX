@@ -1,7 +1,16 @@
 #from uroman import uroman # pip install uroman-python
-import uroman as ur
 
-uroman = ur.Uroman()
+
+
+try:
+    import uroman as ur
+    uroman = ur.Uroman()
+    uroman_type = 0
+except:
+    from uroman import uroman # Python 3.10.14
+    uroman_type = 1
+    # uroman == 1.3.1.1
+    # uroman-python = 1.2.8.1
 
 import re
 from itertools import chain
@@ -36,7 +45,11 @@ def normalize_uroman(text, verbose=False, enable_uroman=True):
     token_text = " ".join(token_list)
 
     # romanize the token text
-    if enable_uroman: roman_text = uroman.romanize_string(token_text)
+    if enable_uroman:
+        if uroman_type == 0:
+            roman_text = uroman.romanize_string(token_text)
+        else:
+            roman_text = uroman(token_text)
 
     # 大寫轉小寫
     if enable_uroman: roman_text = roman_text.lower()
