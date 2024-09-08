@@ -13,7 +13,12 @@ from .audio import load_audio
 from .diarize import DiarizationPipeline, assign_word_speakers
 from .utils import (LANGUAGES, TO_LANGUAGE_CODE, get_writer, optional_float,
                     optional_int, str2bool)
+import faster_whisper
 
+if faster_whisper.__version__ == '1.0.3':
+    print("If faster_whisper 1.0.3 cannot find BatchedInferencePipeline,")
+    print("Please install the master branch of the SYSTRAN/faster-whisper")
+    print('E.g. pip install --force-reinstall "faster-whisper @ https://github.com/SYSTRAN/faster-whisper/archive/refs/heads/master.tar.gz"\n\n')
 
 def cli():
     # fmt: off
@@ -25,6 +30,7 @@ def cli():
     parser.add_argument("--device_index", default=0, type=int, help="device index to use for FasterWhisper inference")
     parser.add_argument("--batch_size", default=8, type=int, help="the preferred batch size for inference")
     parser.add_argument("--compute_type", default="float16", type=str, choices=["float16", "float32", "int8"], help="compute type for computation")
+    parser.add_argument("--word_timestamps", action="store_true", help="Extract word-level timestamps using the cross-attention pattern and dynamic time warping, and include the timestamps for each word in each segment. Set as False.")
 
     parser.add_argument("--output_dir", "-o", type=str, default=".", help="directory to save the outputs")
     parser.add_argument("--output_format", "-f", type=str, default="all", choices=["all", "srt", "vtt", "txt", "tsv", "json", "aud"], help="format of the output file; if not specified, all available formats will be produced")
@@ -89,6 +95,9 @@ def cli():
     device: str = args.pop("device")
     device_index: int = args.pop("device_index")
     compute_type: str = args.pop("compute_type")
+    word_timestamps: bool = args.pop("word_timestamps")
+    if word_timestamps:
+        assert faster_whisper.__version__ >= "1.0.3", "Require faster-whisper 1.0.3 to extract word-level timestamp"
 
     # model_flush: bool = args.pop("model_flush")
     os.makedirs(output_dir, exist_ok=True)
@@ -170,13 +179,52 @@ def cli():
     results = []
     tmp_results = []
     # model = load_model(model_name, device=device, download_root=model_dir)
-    model = load_model(model_name, device=device, device_index=device_index, download_root=model_dir, compute_type=compute_type, language=args['language'], asr_options=asr_options, vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset}, task=task, threads=faster_whisper_threads, vad_model=vad_model)
+    if faster_whisper.__version__ == "1.0.3":
+        model = faster_whisper.WhisperModel(model_name, device=device, compute_type=compute_type)
+        batched_model = faster_whisper.BatchedInferencePipeline(model=model)
+    else:
+        model = load_model(model_name, device=device, device_index=device_index, download_root=model_dir, compute_type=compute_type, language=args['language'], asr_options=asr_options, vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset}, task=task, threads=faster_whisper_threads, vad_model=vad_model)
 
     for audio_path in args.pop("audio"):
         audio = load_audio(audio_path)
         # >> VAD & ASR
         print(">>Performing transcription...")
-        result = model.transcribe(audio_path if vad_model in ['silerov4', 'silerov5.1', 'fsmnvad'] else audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
+
+        if faster_whisper.__version__ == "1.0.3":
+            # Faster-whisper 1.0.3 has already integrated whisperX feature in the master branch
+            faster_whisper_segments, info = batched_model.transcribe(audio, batch_size=batch_size, word_timestamps=word_timestamps)
+            if word_timestamps:
+                word_segments = []
+            segments = []
+            for faster_whisper_segment in faster_whisper_segments:
+                if word_timestamps:
+                    word_segment = []
+                    for word in faster_whisper_segment.words:
+                        word_segment.append({
+                            'word': word.word,
+                            'start': round(word.start, 3),
+                            'end': round(word.end, 3),
+                            'score': round(word.probability,3)
+                        })
+                    word_segments.extend(word_segment)
+                segment = {
+                    'start': faster_whisper_segment.start,
+                    'end': faster_whisper_segment.end,
+                    'text': faster_whisper_segment.text,
+                }
+                if word_timestamps:
+                    segment['words'] = word_segment
+                segments.append(segment)
+            result = {
+                'segments': segments,
+                'language': info.language
+            }
+            if word_timestamps:
+                result['word_segments'] = word_segments
+                no_align = True
+        else:
+            result = model.transcribe(audio_path if vad_model in ['silerov4', 'silerov5.1', 'fsmnvad'] else audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
+
         #result = model.transcribe(audio, batch_size=batch_size, chunk_size=chunk_size, print_progress=print_progress)
         # {'segments': [{'text': ' you.',     'start': 30.384, 'end': 31.984}], 'language': 'en'} <---- silerov4
         # {'segments': [{'text': ' 3, 2, 1.', 'start': 30.316, 'end': 31.323}], 'language': 'en'} <--- pyannote
