@@ -247,11 +247,11 @@ def cli():
         tmp_results = results
         results = []
 
-        disable_mms_fa = align_model is None or align_model.lower() != "mms_fa"
+        disable_mms_fa = align_model is None or align_model.lower() not in ["mms_fa", "ctc-forced-aligner"]
         if disable_mms_fa:
             align_model, align_metadata = load_align_model(align_language, device, model_name=align_model)
         else:
-            align_args = load_mms_fa()
+            align_args = load_mms_fa(align_model.lower())
         for result, audio_path in tmp_results:
             # >> Align
             if len(tmp_results) > 1:
@@ -269,7 +269,7 @@ def cli():
                 result = align(result["segments"], align_model, align_metadata, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
             else:
                 print("MMS_FA")
-                result = mms_align(result["segments"], align_args, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
+                result = mms_align(result["segments"], align_args, input_audio, device, result['language'], interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
             results.append((result, audio_path))
 
         # Unload align model

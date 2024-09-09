@@ -30,7 +30,19 @@ from .alignment import Segment
 from typing import Iterable, Union, List
 from .types import AlignedTranscriptionResult, SingleSegment, SingleAlignedSegment, SingleWordSegment
 import numpy as np
-from .utils import interpolate_nans
+from .utils import interpolate_nans, ISO_639_1_TO_3
+
+from ctc_forced_aligner import (
+    #load_audio,
+    load_alignment_model,
+    generate_emissions,
+    #preprocess_text,
+    get_alignments,
+    get_spans,
+    #postprocess_results,
+    text_normalize,
+    get_uroman_tokens
+)
 
 def tokenize_for_mer(text):
     # https://github.com/HLTCHKUST/ASCEND/blob/8c50c2e2c65f8555eb1d7655310dd585dc1f6710/utils.py#L22
@@ -104,16 +116,21 @@ def load_norm_audio(audio_path):
     duration_in_seconds = waveform.shape[1] / sample_rate
     return waveform, sample_rate, duration_in_seconds
 
+def check_model_name(model_name):
+    model_name = model_name.lower()
+    assert model_name in ["mms_fa", "ctc-forced-aligner"], f"model_name {model_name} is unsupported"
 
-def load_mms_fa(model_type=0):
+def load_mms_fa(model_name):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    if model_type == 0:
+    model_name = model_name.lower()
+    check_model_name(model_name)
+    if model_name == "mms_fa":
         print("Ours")
         model = bundle.get_model().to(device)
         dictionary = bundle.get_dict()
         tokenizer = bundle.get_tokenizer()
         aligner = bundle.get_aligner()
-    elif model_type == 1:
+    elif model_name == "ctc-forced-aligner":
         print("CTC-ForcedAligner")
         dtype=torch.float16 if device == 'cuda' else torch.float32
         model, tokenizer, dictionary = load_alignment_model(device, dtype=dtype)
@@ -121,6 +138,7 @@ def load_mms_fa(model_type=0):
     else:
         raise NotImplementedError
     return {
+        'model_name': model_name,
         'device': device,
         'model': model,
         'dictionary': dictionary,
@@ -134,6 +152,7 @@ def mms_align(
     model_args: dict,
     audio: Union[str, np.ndarray, torch.Tensor],
     device: str,
+    language: str,
     interpolate_method: str = "nearest",
     return_char_alignments: bool = False,
     print_progress: bool = False,
@@ -142,6 +161,8 @@ def mms_align(
     """
     Align phoneme recognition predictions to known transcription.
     """
+    assert language in ISO_639_1_TO_3, f"language {language} is unsupported"
+    language = ISO_639_1_TO_3[language]
     
     if not torch.is_tensor(audio):
         if isinstance(audio, str):
@@ -152,6 +173,8 @@ def mms_align(
     
     MAX_DURATION = audio.shape[1] / SAMPLE_RATE
 
+    model_name = model_args['model_name']
+    check_model_name(model_name)
     model_dictionary = model_args['dictionary']
     model = model_args['model']
     aligner = model_args['aligner']
@@ -166,10 +189,27 @@ def mms_align(
             percent_complete = (50 + base_progress / 2) if combined_progress else base_progress
             print(f"Progress: {percent_complete:.2f}%...")
 
-        # split into words and romans
-        norm_roman, norm_token = normalize_uroman(segment["text"])
-        per_word = norm_roman.split(" ")
-        text = norm_token.split(" ")
+        if model_name == "mms_fa":
+            # split into words and romans
+            norm_roman, norm_token = normalize_uroman(segment["text"])
+            per_word = norm_roman.split(" ")
+            text = norm_token.split(" ")
+        else:
+            text_split = tokenize_for_mer(segment["text"])
+            norm_text = [text_normalize(line.strip(), language) for line in text_split]
+            tokens = get_uroman_tokens(norm_text, language)
+            assert len(norm_text) == len(tokens), "length mismatch"
+
+            tokens_starred = []
+            [tokens_starred.extend(["<star>", token]) for token in tokens]
+            text_starred = []
+            [text_starred.extend(["<star>", chunk]) for chunk in text_split]
+
+            segment["tokens_starred"] = tokens_starred
+            segment["text_starred"] = text_starred
+
+            per_word = tokens
+            text = norm_text
 
         clean_char, clean_cdx = [], []
         for cdx, char in enumerate(text):
@@ -247,31 +287,46 @@ def mms_align(
             lengths = None
 
 
-
-        with torch.inference_mode():
-            tmp = tokenizer(segment["norm_roman"])
-            # obtain emission (the frame-wise probability over tokens)
-            emission, _ = model(waveform_segment.to(device))
-            # emission.shape = torch.Size([1, 1368, 29])
-            token_spans = aligner(emission[0], tmp)
-
-        
-
         char_segments = []
-        for t_spans, chars in zip(token_spans, segment['norm_text']): 
-            char_segments.append(Segment(
-                chars,
-                t_spans[0].start,
-                t_spans[-1].end,
-                sum(s.score * len(s) for s in t_spans) / sum(len(s) for s in t_spans),
-            ))
+        if model_name == "ctc-forced-aligner":
+            emission, stride = generate_emissions(model, waveform_segment[0].to(model.dtype).to(device), batch_size=1)
+            tokens_starred = segment["tokens_starred"]
+            text_starred =  segment["text_starred"]
+            # get_alignments 有機會撞到 segmentation fault... 可能C++ implementation 有問題
+            segments, scores, blank_id = get_alignments(emission, tokens_starred, model_dictionary)
+            spans = get_spans(tokens_starred, segments, tokenizer.decode(blank_id))
+            #word_timestamps = postprocess_results(text_starred, spans, stride, scores)
 
-        
+            for i, chars in enumerate(text_starred):
+                if chars == "<star>": continue
+                seg_start_idx = spans[i][0].start
+                seg_end_idx = spans[i][-1].end
+                score = np.exp(scores[seg_start_idx: seg_end_idx].sum().item())
+                char_segments.append(Segment(
+                    chars,
+                    seg_start_idx,
+                    seg_end_idx,
+                    score
+                ))
+            num_frames = emission.size(0)
+        else:
+            with torch.inference_mode():
+                tmp = tokenizer(segment["norm_roman"])
+                # obtain emission (the frame-wise probability over tokens)
+                emission, _ = model(waveform_segment.to(device))
+                # emission.shape = torch.Size([1, 1368, 29])
+                token_spans = aligner(emission[0], tmp)
+            for t_spans, chars in zip(token_spans, segment['norm_text']): 
+                char_segments.append(Segment(
+                    chars,
+                    t_spans[0].start,
+                    t_spans[-1].end,
+                    sum(s.score * len(s) for s in t_spans) / sum(len(s) for s in t_spans),
+                ))
+            num_frames = emission.size(1)
 
         duration = t2 -t1
-        num_frames = emission.size(1)
         ratio = duration * waveform_segment.size(0) / (num_frames)
-        # ratio = num_points / num_frames / 16000.0
 
         # assign timestamps to aligned characters
         char_segments_arr = []
@@ -376,15 +431,19 @@ if __name__ == "__main__":
     import json
     with open('before_align_results.json') as f:
         results = json.load(f)
-    align_args = load_mms_fa()
+    model_name = "mms_fa"
+    model_name = "ctc-forced-aligner"
+    check_model_name(model_name)
+    align_args = load_mms_fa(model_name)
     device = 'cuda'
     interpolate_method = 'nearest'
     return_char_alignments = False
     print_progress = False
 
+    language = "zh"
     tmp_results = results
     results = []
     for result, audio_path in tmp_results:
         input_audio = audio_path
-        result = mms_align(result["segments"], align_args, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
+        result = mms_align(result["segments"], align_args, input_audio, device, language, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments, print_progress=print_progress)
         import pdb; pdb.set_trace()
