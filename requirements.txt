@@ -5,3 +5,5 @@ transformers
 pandas
 setuptools>=65
 nltk
+uroman-python
+kaldi_native_fbank
