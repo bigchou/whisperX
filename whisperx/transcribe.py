@@ -6,7 +6,11 @@ import warnings
 import numpy as np
 import torch
 
-from .mms_align import load_mms_fa, mms_align
+try:
+    from .mms_align import load_mms_fa, mms_align
+except:
+    print("If you'd like to use MMS_FA, please install the following package manually:")
+    print("pip install git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git")
 from .alignment import align, load_align_model
 from .asr import load_model
 from .audio import load_audio
