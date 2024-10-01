@@ -14,6 +14,7 @@ from .vad import load_vad_model, merge_chunks
 from .types import TranscriptionResult, SingleSegment
 
 from whisperx.fsmnvad import FSMNVad
+from packaging import version
 
 def find_numeral_symbol_tokens(tokenizer):
     numeral_symbol_tokens = []
@@ -30,6 +31,42 @@ class WhisperModel(faster_whisper.WhisperModel):
     Currently only works in non-timestamp mode and fixed prompt for all samples in batch.
     '''
 
+    def get_prompt(
+        self,
+        tokenizer,
+        previous_tokens: List[int],
+        without_timestamps: bool = False,
+        prefix: Optional[str] = None,
+        hotwords: Optional[str] = None,
+    ) -> List[int]:
+        # https://github.com/SYSTRAN/faster-whisper/blob/v1.0.3/faster_whisper/transcribe.py#L970
+        prompt = []
+
+        if previous_tokens or (hotwords and not prefix):
+            prompt.append(tokenizer.sot_prev)
+            if hotwords and not prefix:
+                hotwords_tokens = tokenizer.encode(" " + hotwords.strip())
+                if len(hotwords_tokens) >= self.max_length // 2:
+                    hotwords_tokens = hotwords_tokens[: self.max_length // 2 - 1]
+                prompt.extend(hotwords_tokens)
+            if previous_tokens:
+                prompt.extend(previous_tokens[-(self.max_length // 2 - 1) :])
+
+        prompt.extend(tokenizer.sot_sequence)
+
+        if without_timestamps:
+            prompt.append(tokenizer.no_timestamps)
+
+        if prefix:
+            prefix_tokens = tokenizer.encode(" " + prefix.strip())
+            if len(prefix_tokens) >= self.max_length // 2:
+                prefix_tokens = prefix_tokens[: self.max_length // 2 - 1]
+            if not without_timestamps:
+                prompt.append(tokenizer.timestamp_begin)
+            prompt.extend(prefix_tokens)
+
+        return prompt
+
     def generate_segment_batched(self, features: np.ndarray, tokenizer: faster_whisper.tokenizer.Tokenizer, options: faster_whisper.transcribe.TranscriptionOptions, encoder_output = None):
         batch_size = features.shape[0]
         all_tokens = []
@@ -39,11 +76,13 @@ class WhisperModel(faster_whisper.WhisperModel):
             initial_prompt_tokens = tokenizer.encode(initial_prompt)
             all_tokens.extend(initial_prompt_tokens)
         previous_tokens = all_tokens[prompt_reset_since:]
+
         prompt = self.get_prompt(
             tokenizer,
             previous_tokens,
             without_timestamps=options.without_timestamps,
             prefix=options.prefix,
+            hotwords=options.hotwords if hasattr(options, 'hotwords') else None,
         )
 
         encoder_output = self.encode(features)
@@ -181,7 +220,7 @@ class FasterWhisperPipeline(Pipeline):
         return final_iterator
 
     def transcribe(
-        self, audio: Union[str, np.ndarray], batch_size=None, num_workers=0, language=None, task=None, chunk_size=30, print_progress = False, combined_progress=False
+        self, audio: Union[str, np.ndarray], batch_size=None, num_workers=0, language=None, task=None, chunk_size=30, print_progress = False, combined_progress=False, hotwords=None
     ) -> TranscriptionResult:
         audio_path = None
         if isinstance(audio, str):
@@ -255,6 +294,11 @@ class FasterWhisperPipeline(Pipeline):
             new_suppressed_tokens = numeral_symbol_tokens + self.options.suppress_tokens
             new_suppressed_tokens = list(set(new_suppressed_tokens))
             self.options = self.options._replace(suppress_tokens=new_suppressed_tokens)
+        if hotwords is not None:
+            if version.parse(faster_whisper.__version__) >= version.parse('1.0.3'):
+                self.options = self.options._replace(hotwords=hotwords)
+            else:
+                print(f"[WARNING] faster-whisper {faster_whisper.__version__} does not support 'hotwords'")
 
         segments: List[SingleSegment] = []
         batch_size = batch_size or self._batch_size
@@ -368,6 +412,8 @@ def load_model(whisper_arch,
         "clip_timestamps": None,
         "hallucination_silence_threshold": None,
     }
+    if version.parse(faster_whisper.__version__) >= version.parse('1.0.3'):
+        default_asr_options["hotwords"] = None
 
     if asr_options is not None:
         default_asr_options.update(asr_options)
